@@ -7,3 +7,4 @@ openpyxl
 pypdf
 python-docx
 google-genai
+openpyxl

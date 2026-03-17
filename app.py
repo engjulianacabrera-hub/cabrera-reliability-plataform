@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import weibull_min
+from io import StringIO
 
 st.set_page_config(
     page_title="Reliability AI Industrial Platform",
@@ -236,7 +237,7 @@ div[data-baseweb="select"] > div {
 
 
 # ==============================
-# FUNÇÕES
+# FUNÇÕES ANALÍTICAS
 # ==============================
 def calc_basic_metrics(ttf):
     mtbf = np.mean(ttf)
@@ -335,6 +336,9 @@ def br_money(value):
     return f"R$ {s}"
 
 
+# ==============================
+# FUNÇÕES DE DADOS
+# ==============================
 def load_uploaded_file(uploaded_file):
     if uploaded_file is None:
         return None
@@ -370,14 +374,11 @@ def clean_sap_base(df):
             df[col] = np.nan
 
     out = df.copy()
-
     out["Centro"] = out["Centro"].astype(str).str.strip()
     out["Linha"] = out["Linha"].astype(str).str.strip()
     out["chave do parada"] = out["chave do parada"].astype(str).str.strip()
-
     out["Data Inicio Real"] = pd.to_datetime(out["Data Inicio Real"], errors="coerce", dayfirst=True)
     out["Minutos de paradas"] = pd.to_numeric(out["Minutos de paradas"], errors="coerce")
-
     out = out.dropna(subset=["Data Inicio Real", "chave do parada"])
     return out
 
@@ -414,6 +415,233 @@ def infer_asset_names(asset_df):
     return equipamento, tag, area, tipo_ativo
 
 
+# ==============================
+# FUNÇÕES IA / TEXTO
+# ==============================
+def extract_text_from_uploaded(uploaded_file):
+    if uploaded_file is None:
+        return ""
+
+    filename = uploaded_file.name.lower()
+
+    try:
+        if filename.endswith(".txt") or filename.endswith(".md"):
+            return uploaded_file.getvalue().decode("utf-8", errors="ignore")
+
+        if filename.endswith(".pdf"):
+            from pypdf import PdfReader
+            reader = PdfReader(uploaded_file)
+            pages = []
+            for page in reader.pages:
+                txt = page.extract_text()
+                if txt:
+                    pages.append(txt)
+            return "\n".join(pages)
+
+        if filename.endswith(".docx"):
+            from docx import Document
+            doc = Document(uploaded_file)
+            paras = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+            return "\n".join(paras)
+
+        if filename.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+            return dataframe_to_text(df)
+
+        if filename.endswith(".xlsx"):
+            xls = pd.ExcelFile(uploaded_file)
+            parts = []
+            for sheet in xls.sheet_names[:5]:
+                df = pd.read_excel(uploaded_file, sheet_name=sheet)
+                parts.append(f"\n### Aba: {sheet}\n")
+                parts.append(dataframe_to_text(df))
+            return "\n".join(parts)
+
+        return "Formato não suportado para leitura textual."
+    except Exception as e:
+        return f"Erro ao ler arquivo: {e}"
+
+
+def dataframe_to_text(df, max_rows=120, max_cols=12):
+    if df is None or df.empty:
+        return "Arquivo sem conteúdo."
+
+    df2 = df.copy().head(max_rows)
+    if df2.shape[1] > max_cols:
+        df2 = df2.iloc[:, :max_cols]
+
+    return df2.to_string(index=False)
+
+
+def truncate_text(text, limit=4000):
+    if text is None:
+        return ""
+    text = str(text)
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def get_top_failure_modes(asset_df, top_n=5):
+    if asset_df is None or asset_df.empty:
+        return pd.DataFrame(columns=["Modo de falha", "Ocorrências"])
+
+    col = "Modo de falha"
+    if col not in asset_df.columns:
+        return pd.DataFrame(columns=["Modo de falha", "Ocorrências"])
+
+    vc = (
+        asset_df[col]
+        .fillna("N/D")
+        .astype(str)
+        .str.strip()
+        .replace("", "N/D")
+        .value_counts()
+        .head(top_n)
+        .reset_index()
+    )
+    vc.columns = ["Modo de falha", "Ocorrências"]
+    return vc
+
+
+def get_top_components(asset_df, top_n=5):
+    if asset_df is None or asset_df.empty:
+        return pd.DataFrame(columns=["Componente", "Ocorrências"])
+
+    col = "Componente"
+    if col not in asset_df.columns:
+        return pd.DataFrame(columns=["Componente", "Ocorrências"])
+
+    vc = (
+        asset_df[col]
+        .fillna("N/D")
+        .astype(str)
+        .str.strip()
+        .replace("", "N/D")
+        .value_counts()
+        .head(top_n)
+        .reset_index()
+    )
+    vc.columns = ["Componente", "Ocorrências"]
+    return vc
+
+
+def build_ai_context(result, asset_df, plan_text, manual_text):
+    top_modes = get_top_failure_modes(asset_df, 5)
+    top_components = get_top_components(asset_df, 5)
+
+    modes_text = "Sem dados."
+    if not top_modes.empty:
+        modes_text = "\n".join(
+            [f"- {row['Modo de falha']}: {row['Ocorrências']} ocorrências" for _, row in top_modes.iterrows()]
+        )
+
+    components_text = "Sem dados."
+    if not top_components.empty:
+        components_text = "\n".join(
+            [f"- {row['Componente']}: {row['Ocorrências']} ocorrências" for _, row in top_components.iterrows()]
+        )
+
+    context = f"""
+ATIVO ANALISADO
+- Equipamento: {result['equipamento']}
+- TAG: {result['tag']}
+- Área: {result['area']}
+- Tipo de ativo: {result['tipo_ativo']}
+- Escopo: {result['escopo']}
+
+ANÁLISE DE CONFIABILIDADE
+- Beta Weibull: {result['beta']:.4f}
+- Eta Weibull (h): {result['eta']:.2f}
+- MTTF (h): {result['mtbf']:.2f}
+- B10 modelo (h): {result['b10_model']:.2f}
+- P50 Monte Carlo (h): {result['p50']:.2f}
+- Intervalo ótimo sugerido (h): {result['interval']:.2f}
+- Custo do ciclo esperado: {result['cost']:.2f}
+- Custo por hora: {result['cost_rate']:.6f}
+- Probabilidade de falha no intervalo sugerido: {result['prob_falha']:.8f}
+- Comportamento: {result['comportamento']}
+
+COMPONENTES MAIS RECORRENTES NO HISTÓRICO
+{components_text}
+
+MODOS DE FALHA MAIS RECORRENTES
+{modes_text}
+
+TRECHO DO PLANO ATUAL
+{truncate_text(plan_text, 5000)}
+
+TRECHO DO MANUAL
+{truncate_text(manual_text, 5000)}
+
+TAREFA DA IA
+Com base no histórico de falhas, no comportamento estatístico do ativo, no plano atual e no manual:
+1. identificar lacunas do plano;
+2. apontar atividades faltantes;
+3. apontar atividades redundantes ou genéricas;
+4. sugerir ajustes de periodicidade;
+5. propor uma versão inicial revisada do plano.
+""".strip()
+
+    return context
+
+
+def build_heuristic_review(result, asset_df, plan_text, manual_text):
+    findings = []
+    recommendations = []
+    gaps = []
+
+    beta = result["beta"]
+    top_modes = get_top_failure_modes(asset_df, 3)
+    top_components = get_top_components(asset_df, 3)
+
+    if beta > 1:
+        findings.append("O ativo apresenta padrão de desgaste progressivo, sugerindo revisão de tarefas preventivas e inspeções de condição.")
+    elif beta < 1:
+        findings.append("O ativo apresenta indícios de falhas prematuras, o que pode indicar problemas de instalação, montagem, operação ou manutenção inicial.")
+    else:
+        findings.append("O ativo apresenta comportamento próximo de taxa de falha constante.")
+
+    if not top_components.empty:
+        gaps.append("Verificar se o plano atual cobre explicitamente os componentes mais recorrentes do histórico.")
+        recommendations.append("Adicionar ou revisar tarefas específicas para os componentes com maior recorrência histórica.")
+
+    if not top_modes.empty:
+        recommendations.append("Cruzar os modos de falha mais frequentes com as tarefas atuais para validar cobertura real do plano.")
+        gaps.append("Confirmar se os modos de falha principais possuem tarefas de prevenção, inspeção ou predição associadas.")
+
+    if result["b10_model"] < result["mtbf"]:
+        recommendations.append("Usar o B10 como referência complementar para revisar periodicidades de inspeção antes da média de falha.")
+    
+    plan_lower = (plan_text or "").lower()
+    manual_lower = (manual_text or "").lower()
+
+    if plan_text.strip() == "":
+        gaps.append("Nenhum plano atual foi anexado para comparação.")
+    if manual_text.strip() == "":
+        gaps.append("Nenhum manual foi anexado para comparação.")
+
+    if manual_text.strip() != "" and plan_text.strip() != "":
+        if "vibra" in manual_lower and "vibra" not in plan_lower:
+            gaps.append("O manual sugere tema relacionado a vibração, mas o plano não parece cobrir isso explicitamente.")
+            recommendations.append("Avaliar inclusão de monitoramento ou inspeção de vibração.")
+        if "alinh" in manual_lower and "alinh" not in plan_lower:
+            gaps.append("O manual parece citar alinhamento, mas o plano não evidencia essa atividade.")
+            recommendations.append("Avaliar inclusão de inspeção/verificação de alinhamento.")
+        if "lubr" in manual_lower and "lubr" not in plan_lower:
+            gaps.append("O manual parece trazer recomendações de lubrificação não claramente refletidas no plano.")
+            recommendations.append("Revisar rotinas de lubrificação e seus intervalos.")
+        if "selo" in manual_lower and "selo" not in plan_lower:
+            gaps.append("O manual parece citar selo/vedação sem cobertura explícita no plano.")
+            recommendations.append("Avaliar atividade específica para vedação/selo mecânico.")
+
+    if len(recommendations) == 0:
+        recommendations.append("Estruturar o plano por componente crítico e modo de falha, em vez de manter tarefas excessivamente genéricas.")
+
+    return findings, gaps, recommendations
+
+
+# ==============================
+# FUNÇÕES DE ANÁLISE
+# ==============================
 def analyze_single_asset(ttf, equipamento, tag, area, tipo_ativo, escopo, criticidade, ambiente, custo_prev, custo_corr, nsim):
     mtbf, b10_emp, b50_emp, b90_emp = calc_basic_metrics(ttf)
     beta, eta = fit_weibull(ttf)
@@ -551,20 +779,29 @@ def analyze_portfolio(df, custo_prev, custo_corr, criticidade, ambiente, nsim):
 # ==============================
 st.markdown("""
 <div class='hero-wrap'>
-    <div class='hero-topline'>Cabrera Reliability</div>
+    <div class='hero-topline'>Coke Reliability Suite</div>
     <div class='block-title'>Reliability AI Industrial Platform</div>
-    <div class='hero-subtitle'>Protótipo analítico para confiabilidade, manutenção e gestão de ativos.</div>
+    <div class='hero-subtitle'>Protótipo analítico para confiabilidade, manutenção e gestão de ativos com leitura de base SAP e preparação para IA.</div>
     <div class='hero-chip-row'>
         <div class='hero-chip'>Base SAP</div>
         <div class='hero-chip'>TTF Automático</div>
         <div class='hero-chip'>Weibull</div>
         <div class='hero-chip'>Monte Carlo</div>
         <div class='hero-chip'>Portfólio</div>
-        <div class='hero-chip'>Custo por hora</div>
+        <div class='hero-chip'>IA Revisão de Plano</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
+
+# ==============================
+# VARIÁVEIS BASE
+# ==============================
+asset_df = pd.DataFrame()
+uploaded_df = None
+sap_df = None
+plan_text = ""
+manual_text = ""
 
 # ==============================
 # SIDEBAR
@@ -576,7 +813,6 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Importar Excel ou CSV", type=["xlsx", "csv"])
     uploaded_df = load_uploaded_file(uploaded_file)
 
-    sap_df = None
     ttf_preview_text = "Carregue uma base SAP para gerar os TTFs automaticamente."
     equipamento = "N/D"
     tag = "N/D"
@@ -627,7 +863,6 @@ with st.sidebar:
             st.caption("TTF calculado automaticamente pela diferença entre eventos consecutivos de Data Inicio Real.")
         else:
             asset_df = pd.DataFrame()
-            ttf_vals = np.array([])
 
     st.header("6) Prévia do TTF calculado")
     st.text_area("TTF automático (horas)", ttf_preview_text, height=180)
@@ -651,7 +886,7 @@ if executar:
     if uploaded_df is None:
         st.error("Anexe a base SAP para executar esta versão da plataforma.")
         st.session_state.analysis_ready = False
-    elif "asset_df" not in locals() or asset_df.empty:
+    elif asset_df.empty:
         st.error("Não foi possível identificar um ativo válido na base.")
         st.session_state.analysis_ready = False
     else:
@@ -686,7 +921,7 @@ if executar:
 # ==============================
 # TABS PRINCIPAIS
 # ==============================
-tab1, tab2 = st.tabs(["Análise do ativo", "Portfólio"])
+tab1, tab2, tab3 = st.tabs(["Análise do ativo", "Portfólio", "IA — Revisão de Plano"])
 
 with tab1:
     if st.session_state.analysis_ready and st.session_state.last_result is not None:
@@ -939,6 +1174,119 @@ with tab2:
             st.info("Base importada sem dados válidos para portfólio.")
     else:
         st.info("Para usar o ranking do portfólio, importe a base SAP.")
+
+with tab3:
+    st.markdown("<div class='section-label'>IA — Revisão de Plano</div>", unsafe_allow_html=True)
+
+    if st.session_state.analysis_ready and st.session_state.last_result is not None and not asset_df.empty:
+        r = st.session_state.last_result
+
+        st.write("Anexe o **plano de manutenção atual** e o **manual** para montar o contexto de revisão por IA.")
+
+        c_up1, c_up2 = st.columns(2)
+        with c_up1:
+            plan_file = st.file_uploader(
+                "Plano atual (pdf, docx, txt, xlsx, csv)",
+                type=["pdf", "docx", "txt", "xlsx", "csv"],
+                key="plan_file"
+            )
+        with c_up2:
+            manual_file = st.file_uploader(
+                "Manual do fabricante (pdf, docx, txt, xlsx, csv)",
+                type=["pdf", "docx", "txt", "xlsx", "csv"],
+                key="manual_file"
+            )
+
+        if st.button("Gerar contexto para IA"):
+            plan_text = extract_text_from_uploaded(plan_file) if plan_file is not None else ""
+            manual_text = extract_text_from_uploaded(manual_file) if manual_file is not None else ""
+
+            top_components = get_top_components(asset_df, 5)
+            top_modes = get_top_failure_modes(asset_df, 5)
+            findings, gaps, recommendations = build_heuristic_review(r, asset_df, plan_text, manual_text)
+            ai_context = build_ai_context(r, asset_df, plan_text, manual_text)
+
+            st.subheader("Resumo técnico do ativo")
+            res1, res2, res3, res4 = st.columns(4)
+            res1.metric("MTTF", f"{r['mtbf']:.1f} h")
+            res2.metric("B10", f"{r['b10_model']:.1f} h")
+            res3.metric("β Weibull", f"{r['beta']:.2f}")
+            res4.metric("Intervalo sugerido", f"{r['interval']:.1f} h")
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.subheader("Top componentes do histórico")
+                if top_components.empty:
+                    st.info("Sem dados de componente para este ativo.")
+                else:
+                    st.dataframe(top_components, use_container_width=True)
+
+            with c2:
+                st.subheader("Top modos de falha")
+                if top_modes.empty:
+                    st.info("Sem dados de modo de falha para este ativo.")
+                else:
+                    st.dataframe(top_modes, use_container_width=True)
+
+            p1, p2 = st.columns(2)
+            with p1:
+                st.subheader("Prévia do plano atual")
+                st.text_area(
+                    "Texto extraído do plano",
+                    truncate_text(plan_text, 5000),
+                    height=260,
+                    key="plan_preview"
+                )
+
+            with p2:
+                st.subheader("Prévia do manual")
+                st.text_area(
+                    "Texto extraído do manual",
+                    truncate_text(manual_text, 5000),
+                    height=260,
+                    key="manual_preview"
+                )
+
+            st.subheader("Diagnóstico inicial heurístico")
+            col_f, col_g, col_r = st.columns(3)
+
+            with col_f:
+                st.markdown("**Achados**")
+                for item in findings:
+                    st.write(f"- {item}")
+
+            with col_g:
+                st.markdown("**Lacunas potenciais**")
+                for item in gaps:
+                    st.write(f"- {item}")
+
+            with col_r:
+                st.markdown("**Recomendações iniciais**")
+                for item in recommendations:
+                    st.write(f"- {item}")
+
+            st.subheader("Pacote de contexto pronto para IA")
+            st.text_area(
+                "Prompt/contexto consolidado",
+                ai_context,
+                height=420,
+                key="ai_context_text"
+            )
+
+            context_bytes = ai_context.encode("utf-8")
+            st.download_button(
+                "Baixar contexto para IA (.txt)",
+                data=context_bytes,
+                file_name=f"contexto_ia_{r['tag'].replace(' ', '_')}.txt",
+                mime="text/plain"
+            )
+
+            st.success("Contexto de revisão montado. O próximo passo é conectar esse pacote a um motor de IA para propor melhorias de plano.")
+        else:
+            st.info("Anexe os arquivos e clique em 'Gerar contexto para IA'.")
+    else:
+        st.info("Primeiro execute a análise de um ativo para habilitar a revisão de plano com IA.")
 
 
 # ==============================

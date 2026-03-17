@@ -6,3 +6,4 @@ scipy
 openpyxl
 pypdf
 python-docx
+google-genai

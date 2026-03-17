@@ -1028,8 +1028,7 @@ with tab1:
 
         if st.button("Salvar cenário atual"):
             st.session_state.saved_scenarios.append(r)
-            st.success("Cenário salvo com sucesso!")
-# ==============================
+            st.success("Cenário salvo com sucesso!")# ==============================
 # TAB 2
 # ==============================
 with tab2:

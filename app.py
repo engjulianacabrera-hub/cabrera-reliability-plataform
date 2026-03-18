@@ -221,20 +221,10 @@ div[data-baseweb="select"] > div {
     border: 1px solid rgba(255,255,255,0.10);
 }
 
-[data-testid="stTextInput"] input {
-    color: black !important;
-}
-[data-testid="stTextInput"] input::placeholder {
-    color: #666666 !important;
-}
-[data-testid="stNumberInput"] input {
-    color: black !important;
-}
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
 [data-testid="stTextArea"] textarea {
     color: black !important;
-}
-[data-testid="stTextArea"] textarea::placeholder {
-    color: #666666 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -366,14 +356,8 @@ def load_uploaded_file(uploaded_file):
 
 def clean_sap_base(df):
     expected_cols = [
-        "Centro",
-        "Data Inicio Real",
-        "Linha",
-        "Tipo de Parada",
-        "chave do parada",
-        "Conjunto",
-        "Componente",
-        "Modo de falha",
+        "Centro", "Data Inicio Real", "Linha", "Tipo de Parada",
+        "chave do parada", "Conjunto", "Componente", "Modo de falha",
         "Minutos de paradas"
     ]
 
@@ -642,7 +626,7 @@ Seja técnico, direto e aplicável ao ambiente industrial.
 # FUNÇÕES DE ANÁLISE
 # ==============================
 def analyze_single_asset(ttf, equipamento, tag, area, tipo_ativo, escopo, criticidade, ambiente, custo_prev, custo_corr, nsim):
-    mtbf, b10_emp, b50_emp, b90_emp = calc_basic_metrics(ttf)
+    mtbf, _, _, _ = calc_basic_metrics(ttf)
     beta, eta = fit_weibull(ttf)
     x, r_curve, f_curve, lam_curve = build_weibull_curves(beta, eta, 2000)
 
@@ -659,7 +643,7 @@ def analyze_single_asset(ttf, equipamento, tag, area, tipo_ativo, escopo, critic
     t_min_model = max(1.0, min(np.min(ttf) * 0.25, np.mean(ttf) * 0.25))
     t_max_model = max(np.max(ttf) * 1.5, np.mean(ttf) * 2.0, 500.0)
 
-    intervals, cost_rates, cycle_costs, probs, best_t, best_rate, best_cycle_cost = optimize_interval(
+    intervals, cost_rates, cycle_costs, probs, best_t, _, _ = optimize_interval(
         beta, eta, custo_prev, custo_corr, t_min_model, t_max_model
     )
 
@@ -724,7 +708,7 @@ def analyze_portfolio(df, custo_prev, custo_corr, criticidade, ambiente, nsim):
             t_min_model = max(1.0, min(np.min(ttf) * 0.25, np.mean(ttf) * 0.25))
             t_max_model = max(np.max(ttf) * 1.5, np.mean(ttf) * 2.0, 500.0)
 
-            intervals, cost_rates, cycle_costs, probs, best_t, best_rate, best_cycle_cost = optimize_interval(
+            intervals, _, _, _, best_t, _, _ = optimize_interval(
                 beta, eta, custo_prev, custo_corr, t_min_model, t_max_model
             )
 
@@ -777,23 +761,20 @@ def analyze_portfolio(df, custo_prev, custo_corr, criticidade, ambiente, nsim):
 # ==============================
 st.markdown("""
 <div class='hero-wrap'>
-    <div class='hero-topline'>Cabrera Reliability</div>
+    <div class='hero-topline'>Coke Reliability Suite</div>
     <div class='block-title'>Reliability AI Industrial Platform</div>
-    <div class='hero-subtitle'>Protótipo analítico para confiabilidade, manutenção e gestão de ativos com IA para revisão de planos.</div>
+    <div class='hero-subtitle'>Protótipo analítico para confiabilidade, manutenção e gestão de ativos com leitura de base SAP e IA para revisão de planos.</div>
     <div class='hero-chip-row'>
         <div class='hero-chip'>Base SAP</div>
         <div class='hero-chip'>TTF Automático</div>
         <div class='hero-chip'>Weibull</div>
         <div class='hero-chip'>Monte Carlo</div>
         <div class='hero-chip'>Portfólio</div>
-        <div class='hero-chip'>Gemini IA</div>
+        <div class='hero-chip'>IA Revisão de Plano</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ==============================
-# VARIÁVEIS BASE
-# ==============================
 asset_df = pd.DataFrame()
 uploaded_df = None
 sap_df = None
@@ -831,11 +812,7 @@ with st.sidebar:
 
         st.header("5) Filtros SAP")
         tipos_disponiveis = sorted(sap_df["Tipo de Parada"].dropna().astype(str).unique().tolist())
-        tipos_selecionados = st.multiselect(
-            "Tipo de Parada",
-            tipos_disponiveis,
-            default=tipos_disponiveis
-        )
+        tipos_selecionados = st.multiselect("Tipo de Parada", tipos_disponiveis, default=tipos_disponiveis)
 
         if len(tipos_selecionados) > 0:
             sap_df = sap_df[sap_df["Tipo de Parada"].astype(str).isin(tipos_selecionados)].copy()
@@ -918,117 +895,203 @@ tab1, tab2, tab3 = st.tabs(["Análise do ativo", "Portfólio", "IA — Revisão 
 # TAB 1
 # ==============================
 with tab1:
-
-    if "last_result" not in st.session_state or st.session_state.last_result is None:
-        st.info("Execute uma análise para visualizar os resultados.")
-    else:
+    if st.session_state.analysis_ready and st.session_state.last_result is not None:
         r = st.session_state.last_result
 
-        col1, col2 = st.columns([1, 1.2])
+        st.markdown("<div class='section-label'>Dashboard executivo</div>", unsafe_allow_html=True)
 
-        # =========================
-        # LADO ESQUERDO
-        # =========================
-        with col1:
+        c1, c2, c3, c4 = st.columns(4)
 
+        with c1:
+            st.markdown("""
+            <div class='card'>
+                <div class='metric-title'>Modelo selecionado</div>
+                <div class='metric-value'>Weibull</div>
+                <div class='small-text'>Ajuste estatístico real</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c2:
+            st.markdown(f"""
+            <div class='card'>
+                <div class='metric-title'>β (Weibull)</div>
+                <div class='metric-value'>{r['beta']:.2f}</div>
+                <div class='small-text'>{r['comportamento']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c3:
+            st.markdown(f"""
+            <div class='card'>
+                <div class='metric-title'>η (Weibull)</div>
+                <div class='metric-value'>{r['eta']:.1f} h</div>
+                <div class='small-text'>Vida característica</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c4:
+            st.markdown(f"""
+            <div class='card'>
+                <div class='metric-title'>Intervalo econômico</div>
+                <div class='metric-value'>{r['interval']:.1f} h</div>
+                <div class='small-text'>Otimizado por custo por hora</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        a1, a2, _ = st.columns([1, 1, 2])
+
+        with a1:
+            if st.button("Salvar cenário atual"):
+                export_result = {
+                    "equipamento": r["equipamento"],
+                    "tag": r["tag"],
+                    "area": r["area"],
+                    "tipo_ativo": r["tipo_ativo"],
+                    "escopo": r["escopo"],
+                    "beta": round(float(r["beta"]), 4),
+                    "eta_h": round(float(r["eta"]), 2),
+                    "mttf_h": round(float(r["mtbf"]), 2),
+                    "b10_model_h": round(float(r["b10_model"]), 2),
+                    "mc_p50_h": round(float(r["p50"]), 2),
+                    "intervalo_otimo_h": round(float(r["interval"]), 2),
+                    "custo_ciclo_r$": round(float(r["cost"]), 2),
+                    "custo_por_h_r$": round(float(r["cost_rate"]), 6),
+                    "prob_falha": round(float(r["prob_falha"]), 8),
+                }
+                st.session_state.saved_scenarios.append(export_result)
+                st.success("Cenário salvo com sucesso.")
+
+        with a2:
+            export_df = pd.DataFrame([{
+                "equipamento": r["equipamento"],
+                "tag": r["tag"],
+                "area": r["area"],
+                "tipo_ativo": r["tipo_ativo"],
+                "escopo": r["escopo"],
+                "beta": round(float(r["beta"]), 4),
+                "eta_h": round(float(r["eta"]), 2),
+                "mttf_h": round(float(r["mtbf"]), 2),
+                "b10_model_h": round(float(r["b10_model"]), 2),
+                "mc_p50_h": round(float(r["p50"]), 2),
+                "intervalo_otimo_h": round(float(r["interval"]), 2),
+                "custo_ciclo_r$": round(float(r["cost"]), 2),
+                "custo_por_h_r$": round(float(r["cost_rate"]), 6),
+                "prob_falha": round(float(r["prob_falha"]), 8),
+            }])
+            csv_data = export_df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "Exportar resultado CSV",
+                data=csv_data,
+                file_name=f"resultado_{r['tag'].replace(' ', '_')}.csv",
+                mime="text/csv"
+            )
+
+        st.subheader("Indicadores")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("MTTF observado", f"{r['mtbf']:.1f} h")
+        k2.metric("B10 modelo", f"{r['b10_model']:.1f} h")
+        k3.metric("P50 Monte Carlo", f"{r['p50']:.1f} h")
+        k4.metric("Custo por hora", br_money(r["cost_rate"]))
+
+        left, right = st.columns([1, 1.2])
+
+        with left:
             st.subheader("Resumo do cenário")
-
             df = pd.DataFrame({
-                "Indicador": [
-                    "Equipamento",
-                    "Área",
-                    "MTTF (h)",
-                    "β (beta)",
-                    "η (eta)",
-                    "B10 modelo",
-                    "Intervalo ótimo",
-                    "Probabilidade de falha",
-                    "Custo do ciclo",
-                    "Custo por hora"
+                "Campo": [
+                    "Equipamento", "TAG", "Área", "Tipo de ativo", "Escopo",
+                    "Beta", "Eta (h)", "MTTF (h)", "Intervalo ótimo (h)",
+                    "Custo do ciclo", "Custo por hora"
                 ],
                 "Valor": [
                     r["equipamento"],
+                    r["tag"],
                     r["area"],
-                    f"{r['mtbf']:.1f}",
-                    f"{r['beta']:.2f}",
-                    f"{r['eta']:.1f}",
-                    f"{r['b10_model']:.1f}",
-                    f"{r['interval']:.1f}",
-                    f"{r['prob_falha']:.6f}",
+                    r["tipo_ativo"],
+                    r["escopo"],
+                    round(float(r["beta"]), 4),
+                    round(float(r["eta"]), 2),
+                    round(float(r["mtbf"]), 2),
+                    round(float(r["interval"]), 2),
                     br_money(r["cost"]),
                     br_money(r["cost_rate"])
                 ]
             })
-
             st.dataframe(df, use_container_width=True)
 
-            # =========================
-            # TTFs
-            # =========================
             st.subheader("TTFs calculados automaticamente")
-
             df_ttf = pd.DataFrame({"TTF (h)": r["ttf"]})
             st.dataframe(df_ttf, use_container_width=True)
 
-            # =========================
-            # 🧠 LEITURA EXECUTIVA (AQUI ESTAVA FALTANDO)
-            # =========================
             st.subheader("Leitura executiva")
 
             if r["beta"] < 1:
-                interpretacao_beta = "falhas prematuras (mortalidade infantil)"
+                interpretacao_beta = "falhas prematuras / mortalidade infantil"
             elif 0.85 <= r["beta"] <= 1.15:
-                interpretacao_beta = "falhas aleatórias (taxa constante)"
+                interpretacao_beta = "falhas aleatórias com taxa aproximadamente constante"
             else:
-                interpretacao_beta = "desgaste progressivo (envelhecimento do ativo)"
+                interpretacao_beta = "desgaste progressivo / envelhecimento do ativo"
 
-            st.markdown(f"""
-**Interpretação do comportamento do ativo:**
+            st.write(
+                f"""
+- O ativo **{r['equipamento']}** na área **{r['area']}** apresentou **β = {r['beta']:.2f}**, indicando **{interpretacao_beta}**.
+- A **vida característica η** estimada foi de **{r['eta']:.1f} h**.
+- O **MTTF observado** calculado automaticamente a partir dos eventos foi **{r['mtbf']:.1f} h**.
+- O **B10 do modelo** foi de **{r['b10_model']:.1f} h**, indicando o ponto em que aproximadamente 10% da população falharia.
+- O **intervalo econômico ajustado** ficou em **{r['interval']:.1f} h**.
+- O **custo do ciclo esperado** nesse cenário é de **{br_money(r['cost'])}**.
+- O **custo esperado por hora** ficou em **{br_money(r['cost_rate'])}**.
+- A **probabilidade de falha** no intervalo recomendado é **{r['prob_falha']:.8f}**.
+                """
+            )
 
-- O ativo **{r['equipamento']}** na área **{r['area']}** apresentou **β = {r['beta']:.2f}**, indicando **{interpretacao_beta}**  
-- A **vida característica (η)** estimada foi de **{r['eta']:.1f} h**  
-- O **MTTF observado** foi de **{r['mtbf']:.1f} h**  
+        with right:
+            st.subheader("Curvas Weibull — R(t), F(t) e λ(t)")
+            fig1, ax1 = plt.subplots(figsize=(9, 4.2))
+            ax1.plot(r["x"], r["r_curve"], label="Confiabilidade R(t)")
+            ax1.plot(r["x"], r["f_curve"], label="Probabilidade de Falha F(t)")
+            ax1.plot(r["x"], r["lam_curve"], label="Taxa de Falha λ(t)")
+            ax1.axvline(r["interval"], linestyle="--", linewidth=1, label="Intervalo sugerido")
+            ax1.set_xlabel("Tempo (horas)")
+            ax1.set_ylabel("Valor")
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            st.pyplot(fig1)
 
-**Recomendação de manutenção:**
+            g1, g2 = st.columns(2)
 
-- O **intervalo ótimo calculado** é de **{r['interval']:.1f} h**  
-- O **B10 do modelo** foi de **{r['b10_model']:.1f} h**  
-- A **probabilidade de falha nesse intervalo** é de **{r['prob_falha']:.6f}**  
+            with g1:
+                st.subheader("Monte Carlo")
+                fig2, ax2 = plt.subplots(figsize=(5.2, 3.4))
+                ax2.hist(r["mc_samples"], bins=28)
+                ax2.set_xlabel("Vida simulada (h)")
+                ax2.set_ylabel("Frequência")
+                ax2.grid(True, alpha=0.3)
+                st.pyplot(fig2)
 
-**Impacto econômico:**
+            with g2:
+                st.subheader("Custo por hora x intervalo")
+                fig3, ax3 = plt.subplots(figsize=(5.2, 3.4))
+                ax3.plot(r["xs"], r["cost_rates"])
+                ax3.axvline(r["interval"], linestyle="--", linewidth=1)
+                ax3.set_xlabel("Intervalo")
+                ax3.set_ylabel("Custo por hora")
+                ax3.grid(True, alpha=0.3)
+                st.pyplot(fig3)
 
-- **Custo do ciclo:** {br_money(r['cost'])}  
-- **Custo por hora:** {br_money(r['cost_rate'])}  
-""")
+            st.subheader("Weibull Probability Plot")
+            fig4, ax4 = plt.subplots(figsize=(9, 4.0))
+            ax4.scatter(r["x_plot"], r["y_plot"], label="Falhas observadas")
+            ax4.plot(r["x_plot"], r["y_fit"], label="Ajuste Weibull")
+            ax4.set_xlabel("ln(TTF)")
+            ax4.set_ylabel("ln(-ln(1-F))")
+            ax4.grid(True, alpha=0.3)
+            ax4.legend()
+            st.pyplot(fig4)
+    else:
+        st.info("Anexe a base SAP, selecione o ativo e execute a análise.")
 
-        # =========================
-        # LADO DIREITO (GRÁFICOS)
-        # =========================
-        with col2:
-
-            st.subheader("Curva Weibull")
-
-            fig = build_weibull_curve(r["beta"], r["eta"])
-            st.pyplot(fig)
-
-            st.subheader("Monte Carlo")
-
-            fig_mc = monte_carlo_simulation(r["beta"], r["eta"])
-            st.pyplot(fig_mc)
-
-            st.subheader("Probability Plot")
-
-            fig_pp = probability_plot(r["ttf"])
-            st.pyplot(fig_pp)
-
-        # =========================
-        # SALVAR CENÁRIO
-        # =========================
-        st.markdown("---")
-
-        if st.button("Salvar cenário atual"):
-            st.session_state.saved_scenarios.append(r)
-            st.success("Cenário salvo com sucesso!")# ==============================
+# ==============================
 # TAB 2
 # ==============================
 with tab2:
@@ -1095,20 +1158,11 @@ with tab3:
 
         c_up1, c_up2 = st.columns(2)
         with c_up1:
-            plan_file = st.file_uploader(
-                "Plano atual (xlsx, csv, txt)",
-                type=["xlsx", "csv", "txt"],
-                key="plan_file"
-            )
+            plan_file = st.file_uploader("Plano atual (xlsx, csv, txt)", type=["xlsx", "csv", "txt"], key="plan_file")
         with c_up2:
-            manual_file = st.file_uploader(
-                "Manual do fabricante (pdf, txt)",
-                type=["pdf", "txt"],
-                key="manual_file"
-            )
+            manual_file = st.file_uploader("Manual do fabricante (pdf, txt)", type=["pdf", "txt"], key="manual_file")
 
         col_bt1, col_bt2 = st.columns(2)
-
         with col_bt1:
             gerar_contexto = st.button("Gerar contexto técnico")
         with col_bt2:
@@ -1194,7 +1248,6 @@ st.markdown("<div class='section-label'>Portfólio de cenários</div>", unsafe_a
 
 if len(st.session_state.saved_scenarios) > 0:
     st.subheader("Histórico de cenários salvos")
-
     hist_df = pd.DataFrame(st.session_state.saved_scenarios)
     st.dataframe(hist_df, use_container_width=True)
 

@@ -610,17 +610,15 @@ RESPONDA EM PORTUGUÊS, ORGANIZADO NESTES BLOCOS:
 6. PROPOSTA INICIAL DE PLANO MELHORADO
 7. RISCOS DE MANTER O PLANO ATUAL SEM REVISÃO
 8. PRÓXIMOS PASSOS RECOMENDADOS
-
-Seja técnico, direto e aplicável ao ambiente industrial.
 """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt
         )
         return response.text
+
     except Exception as e:
         return f"Erro ao chamar Gemini: {e}"
-
 
 # ==============================
 # FUNÇÕES DE ANÁLISE
